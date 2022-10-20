@@ -4,6 +4,10 @@ interface EntityConfig {
   objectStoreName: string;
   column: Record<string, ColumnConfig>;
   indexList: Array<Index>;
+  primary: {
+    keyPath: string;
+    autoIncrement: boolean;
+  };
 }
 
 interface Index {
@@ -32,6 +36,10 @@ function init(Ctor: Consturctor | Object): EntityConfig {
       objectStoreName: "",
       column: {},
       indexList: [],
+      primary: {
+        autoIncrement: true,
+        keyPath: "_id",
+      },
     };
     Reflect.defineMetadata("CONFIG", c, Ctor);
     return c;
@@ -78,6 +86,13 @@ export function Column(options?: ColumnOptions) {
   };
 }
 
+export function PrimaryGeneratedColumn() {
+  return function (target: Object, propKey: string) {
+    const config = init(target.constructor);
+    config.primary.keyPath = propKey;
+  };
+}
+
 interface ManagerOptions<T> {
   where?: Partial<T>;
   limit?: number;
@@ -98,6 +113,11 @@ interface Manager {
     Entity: T,
     value: Partial<InstanceType<T>>
   ): Promise<IDBValidKey>;
+  updateOne<T extends AbstractClass>(
+    Entity: T,
+    value: Partial<InstanceType<T>>,
+    key?: string
+  ): Promise<any>;
 }
 
 interface IndexDBUtilOptions {
@@ -308,6 +328,20 @@ export class IndexDBUtil {
           }
         });
       },
+
+      updateOne: (Entity, value, key) => {
+        return new Promise((resolve, reject) => {
+          const config = init(Entity);
+          const request = this.db
+            .transaction(config.objectStoreName, "readwrite")
+            .objectStore(config.objectStoreName)
+            .put(value);
+          request.addEventListener("success", () => {
+            resolve(request.result);
+          });
+          request.addEventListener("error", (err) => reject(err));
+        });
+      },
     };
   }
 
@@ -343,16 +377,13 @@ export class IndexDBUtil {
     this.options.entityList.forEach((config) => {
       // 如果不存在对应objectStore添加
       if (!transaction.objectStoreNames.contains(config.objectStoreName)) {
-        this.db.createObjectStore(config.objectStoreName, {
-          autoIncrement: true,
-          keyPath: "id",
-        });
+        this.db.createObjectStore(config.objectStoreName, config.primary);
       }
     });
   }
 
   public connect() {
-    return new Promise(async (resolve, reject) => {
+    return new Promise<IDBDatabase>(async (resolve, reject) => {
       const { name, version } = this.options;
       if (!Number.isInteger(version)) {
         return reject(`version ${version} 必须是一个整数`);
