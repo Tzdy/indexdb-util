@@ -1,6 +1,7 @@
 import {
   Column,
   CreateIndex,
+  CreateUniqueIndex,
   Entity,
   IndexDBUtil,
   PrimaryGeneratedColumn,
@@ -8,12 +9,16 @@ import {
 
 @Entity("account")
 @CreateIndex("name", "name")
+@CreateUniqueIndex("username", "username")
 class AccountEntity {
   @PrimaryGeneratedColumn()
   id: number;
 
   @Column()
   name: string;
+
+  @Column()
+  username: string;
 }
 
 const util = new IndexDBUtil({
@@ -23,22 +28,17 @@ const util = new IndexDBUtil({
 });
 
 util.connect().then(async (db) => {
-  console
-    .log
-    // db.transaction("account", "readwrite").objectStore("account").delete()
-    ();
+  // db.transaction("account", "readwrite").objectStore("account").index('name')
   // await util.manager.insertOne(AccountEntity, {
-  //   name: "ydy",
+  //   username: "anqi00",
+  //   name: "tst",
   // });
   // await util.manager.updateOne(AccountEntity, {
   //   name: "nimabi",
   //   id: 2,
   // });
-  // const val = await util.manager.findOne(AccountEntity, {
-  //   where: {
-  //     name: "anqi",
-  //   },
-  // });
+  // const val = await util.manager.findOne(AccountEntity);
+  // console.log(val);
   // const arr = await util.manager.find(AccountEntity, {
   //   where: {
   //     name: "anqi",
@@ -47,4 +47,9 @@ util.connect().then(async (db) => {
   // });
   // console.log(val);
   // console.log(arr);
+  // await util.manager.deleteOne(AccountEntity, {
+  //   where: {
+  //     name: "ydy",
+  //   },
+  // });
 });

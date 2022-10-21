@@ -94,7 +94,7 @@ export function PrimaryGeneratedColumn() {
 }
 
 interface ManagerOptions<T> {
-  where?: Partial<T>;
+  where: Partial<T> | Record<string, any>;
   limit?: number;
 }
 
@@ -115,8 +115,11 @@ interface Manager {
   ): Promise<IDBValidKey>;
   updateOne<T extends AbstractClass>(
     Entity: T,
-    value: Partial<InstanceType<T>>,
-    key?: string
+    value: Partial<InstanceType<T>>
+  ): Promise<any>;
+  deleteOne<T extends AbstractClass>(
+    Entity: T,
+    options?: ManagerOptions<InstanceType<T>>
   ): Promise<any>;
 }
 
@@ -148,101 +151,125 @@ export class IndexDBUtil {
       ...options,
     };
 
-    function getIndex<T extends AbstractClass>(
-      Entity: AbstractClass,
-      options?: ManagerOptions<InstanceType<T>> | undefined
+    function findByPrimaryKey(
+      objectStore: IDBObjectStore,
+      where: Record<string, any>,
+      primaryKey: string
     ) {
-      let directIndex: Index | null = null; // 直接索引，一次就能查出来。
-      const indirectIndexList: Array<Index> = []; // 间接索引，查询多次。
-      const config = init(Entity);
-      if (options?.where) {
-        const keys = Object.keys(options.where);
-        if (keys.length > 0) {
-          for (const i of config.indexList) {
-            if (i.keyPath instanceof Array) {
-              if (keys.every((k) => i.keyPath.includes(k))) {
-                directIndex = i;
-                break;
-              }
-            } else {
-              if (keys.includes(i.keyPath)) {
-                indirectIndexList.push(i);
-              }
-            }
-          }
+      const keys = Object.keys(where);
+      return new Promise<any>((resolve, reject) => {
+        // 如果where中包含主键
+        if (keys.includes(primaryKey)) {
+          const request = objectStore.get(where[primaryKey]);
+          request.addEventListener("success", () => {
+            resolve(request.result);
+          });
+          request.addEventListener("error", (err) => {
+            reject(err);
+          });
+          return;
+        } else {
+          resolve(null);
         }
-      }
-      return {
-        directIndex,
-        indirectIndexList,
-      };
+      });
+    }
+
+    function findByUniqueIndex(
+      objectStore: IDBObjectStore,
+      where: Record<string, any>
+    ) {
+      return new Promise<any>((resolve, reject) => {
+        const keys = Object.keys(where);
+        const uniqueIndex = keys.find((key) => objectStore.index(key).unique);
+        // 如果有唯一索引
+        if (uniqueIndex) {
+          const request = objectStore
+            .index(uniqueIndex)
+            .get(where[uniqueIndex]);
+          request.addEventListener("success", () => {
+            resolve(request.result);
+          });
+          request.addEventListener("error", (err) => {
+            reject(err);
+          });
+        } else {
+          resolve(null);
+        }
+      });
+    }
+
+    function findByIndex(
+      objectStore: IDBObjectStore,
+      where: Record<string, any>
+    ) {
+      return new Promise<any>((resolve, reject) => {
+        const keys = Object.keys(where);
+        const index = keys.find((key) => objectStore.index(key));
+        // 如果有索引
+        if (index) {
+          const request = objectStore.index(index).getAll(where[index]);
+          request.addEventListener("success", () => {
+            resolve(request.result);
+          });
+          request.addEventListener("error", (err) => {
+            reject(err);
+          });
+        } else {
+          resolve(null);
+        }
+      });
     }
 
     this.manager = {
-      findOne: (Entity, options) => {
+      findOne: (Entity: any, options = { where: {} }) => {
         const config = init(Entity);
-        const { directIndex, indirectIndexList } = getIndex(Entity, options);
-        return new Promise((resolve, reject) => {
+        return new Promise(async (resolve, reject) => {
           const objectStore = this.db
             .transaction(config.objectStoreName, "readonly")
             .objectStore(config.objectStoreName);
-          if (
-            directIndex &&
-            options?.where &&
-            directIndex.keyPath instanceof Array
-          ) {
-            const query = Object.values(options.where);
-            const keys = Object.keys(options.where);
-            for (let i = 0; i < query.length; i++) {
-              const idx = keys.findIndex(
-                (k) => k === (directIndex as Index).keyPath[i]
-              );
-              if (idx !== i) {
-                const bak = query[i];
-                query[i] = query[idx];
-                query[idx] = bak;
-              }
-            }
-            const request = objectStore.index(directIndex.name).get(query);
-            request.addEventListener("success", () => {
-              resolve(request.result);
-            });
-            request.addEventListener("error", (err) => {
-              reject(err);
-            });
-          } else if (indirectIndexList.length > 0 && options?.where) {
-            const request = objectStore
-              .index(indirectIndexList[0].name)
-              .getAll(options?.where[indirectIndexList[0].keyPath as string]);
-            request.addEventListener("success", () => {
-              request.result.forEach((item) => {
-                // where中的字段和item中对应的字段对比
-                if (
-                  options.where &&
-                  JSON.stringify(
-                    Object.keys(options.where).reduce((a, b) => {
-                      Reflect.set(a, b, item[b]);
-                      return a;
-                    }, {})
-                  ) === JSON.stringify(options.where)
-                ) {
-                  return resolve(item);
-                }
-              });
-              return resolve(null);
-            });
-            request.addEventListener("error", (err) => {
-              reject(err);
-            });
-          } else {
-            const request = objectStore.getAll(null, 1);
-            request.addEventListener("success", () => {
-              resolve(request.result[0]);
-            });
-            request.addEventListener("error", (err) => {
-              reject(err);
-            });
+          const primaryIndexData = await findByPrimaryKey(
+            objectStore,
+            options.where,
+            config.primary.keyPath
+          );
+          const keys = Object.keys(options.where);
+          if (primaryIndexData) {
+            return resolve(primaryIndexData);
           }
+
+          const uniqueIndexData = await findByUniqueIndex(
+            objectStore,
+            options.where
+          );
+          if (uniqueIndexData) {
+            return resolve(uniqueIndexData);
+          }
+
+          const indexDataList = await findByIndex(objectStore, options.where);
+          if (indexDataList) {
+            return resolve(
+              indexDataList.find((i: any) => {
+                return keys.every((k) => options.where[k] === i[k]);
+              })
+            );
+          }
+
+          // 没有索引
+          const request = objectStore.openCursor();
+          request.addEventListener("success", () => {
+            const cursor = request.result;
+            if (cursor) {
+              if (
+                keys.every((key) => options.where[key] === cursor.value[key])
+              ) {
+                return resolve(cursor.value);
+              }
+              cursor.continue();
+            }
+          });
+          request.addEventListener("error", (err) => {
+            reject(err);
+          });
         });
       },
 
@@ -260,76 +287,42 @@ export class IndexDBUtil {
         });
       },
 
-      find: (Entity, options?) => {
-        return new Promise((resolve, reject) => {
+      find: (Entity, options = { where: {} }) => {
+        return new Promise(async (resolve, reject) => {
           const config = init(Entity);
-          const { directIndex, indirectIndexList } = getIndex(Entity, options);
           const objectStore = this.db
             .transaction(config.objectStoreName, "readonly")
             .objectStore(config.objectStoreName);
-          if (
-            directIndex &&
-            options?.where &&
-            directIndex.keyPath instanceof Array
-          ) {
-            const query = Object.values(options.where);
-            const keys = Object.keys(options.where);
-            for (let i = 0; i < query.length; i++) {
-              const idx = keys.findIndex(
-                (k) => k === (directIndex as Index).keyPath[i]
-              );
-              if (idx !== i) {
-                const bak = query[i];
-                query[i] = query[idx];
-                query[idx] = bak;
-              }
-            }
-            const request = objectStore.index(directIndex.name).getAll(query);
-            request.addEventListener("success", () => {
-              resolve(request.result);
-            });
-            request.addEventListener("error", (err) => {
-              reject(err);
-            });
-          } else if (indirectIndexList.length > 0 && options?.where) {
-            const request = objectStore
-              .index(indirectIndexList[0].name)
-              .getAll(options?.where[indirectIndexList[0].keyPath as string]);
-            request.addEventListener("success", () => {
-              resolve(
-                request.result.filter((item) => {
-                  // where中的字段和item中对应的字段对比
-                  if (
-                    options.where &&
-                    JSON.stringify(
-                      Object.keys(options.where).reduce((a, b) => {
-                        Reflect.set(a, b, item[b]);
-                        return a;
-                      }, {})
-                    ) === JSON.stringify(options.where)
-                  ) {
-                    return true;
-                  }
-                })
-              );
-            });
-            request.addEventListener("error", (err) => {
-              reject(err);
-            });
-          } else {
-            const request = this.db
-              .transaction(config.objectStoreName, "readonly")
-              .objectStore(config.objectStoreName)
-              .getAll();
-            request.addEventListener("success", () => {
-              resolve(request.result);
-            });
-            request.addEventListener("error", (err) => reject(err));
+          const keys = Object.keys(options.where);
+          const indexDataList = await findByIndex(objectStore, options.where);
+          if (indexDataList) {
+            return resolve(
+              indexDataList.find((i: any) => {
+                return keys.every((k) => options.where[k] === i[k]);
+              })
+            );
           }
+
+          // 没有索引
+          const request = objectStore.openCursor();
+          request.addEventListener("success", () => {
+            const cursor = request.result;
+            if (cursor) {
+              if (
+                keys.every((key) => options.where[key] === cursor.value[key])
+              ) {
+                return resolve(cursor.value);
+              }
+              cursor.continue();
+            }
+          });
+          request.addEventListener("error", (err) => {
+            reject(err);
+          });
         });
       },
 
-      updateOne: (Entity, value, key) => {
+      updateOne: (Entity, value) => {
         return new Promise((resolve, reject) => {
           const config = init(Entity);
           const request = this.db
@@ -340,6 +333,53 @@ export class IndexDBUtil {
             resolve(request.result);
           });
           request.addEventListener("error", (err) => reject(err));
+        });
+      },
+
+      deleteOne: (Entity, options = { where: {} }) => {
+        return new Promise(async (resolve, reject) => {
+          const config = init(Entity);
+          const objectStore = this.db
+            .transaction(config.objectStoreName, "readwrite")
+            .objectStore(config.objectStoreName);
+
+          const keys = Object.keys(options.where);
+          const indexDataList = await findByIndex(objectStore, options.where);
+          if (indexDataList) {
+            const data = indexDataList.find((i: any) => {
+              return keys.every((k) => options.where[k] === i[k]);
+            });
+            if (data) {
+              objectStore
+                .delete(data[config.primary.keyPath])
+                .addEventListener("success", () => {
+                  resolve(data);
+                });
+              return;
+            }
+          }
+
+          // 没有索引
+          const request = objectStore.openCursor();
+          request.addEventListener("success", () => {
+            const cursor = request.result;
+            if (cursor) {
+              if (
+                keys.every((key) => options.where[key] === cursor.value[key])
+              ) {
+                objectStore
+                  .delete(cursor.value[config.primary.keyPath])
+                  .addEventListener("success", () => {
+                    resolve(cursor.value);
+                  });
+                return;
+              }
+              cursor.continue();
+            }
+          });
+          request.addEventListener("error", (err) => {
+            reject(err);
+          });
         });
       },
     };
