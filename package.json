@@ -4,8 +4,8 @@
   "description": "",
   "scripts": {
     "dev": "vite",
-    "prerelease": "version prerelease -m prerelease",
-    "publish": "publish --access=public ."
+    "prerelease": "npm version prerelease -m prerelease",
+    "publish": "vite build && npm publish --access=public ."
   },
   "main": "dist/indexdb-util.mjs",
   "types": "src/lib.ts",
