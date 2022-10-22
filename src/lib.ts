@@ -104,11 +104,11 @@ interface Manager {
   findOne<T extends AbstractClass>(
     Entity: T,
     options?: ManagerOptions<InstanceType<T>>
-  ): Promise<T | null>;
+  ): Promise<InstanceType<T> | null>;
   find<T extends AbstractClass>(
     Entity: T,
     options?: ManagerOptions<InstanceType<T>>
-  ): Promise<T[] | null>;
+  ): Promise<Array<InstanceType<T>>>;
   insertOne<T extends AbstractClass>(
     Entity: T,
     value: Partial<InstanceType<T>>
@@ -305,15 +305,18 @@ export class IndexDBUtil {
 
           // 没有索引
           const request = objectStore.openCursor();
+          const list: InstanceType<AbstractClass>[] = [];
           request.addEventListener("success", () => {
             const cursor = request.result;
             if (cursor) {
               if (
                 keys.every((key) => options.where[key] === cursor.value[key])
               ) {
-                return resolve(cursor.value);
+                list.push(cursor.value);
               }
               cursor.continue();
+            } else {
+              resolve(list);
             }
           });
           request.addEventListener("error", (err) => {
