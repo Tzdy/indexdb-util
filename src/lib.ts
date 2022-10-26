@@ -94,7 +94,7 @@ export function PrimaryGeneratedColumn() {
 }
 
 interface ManagerOptions<T> {
-  where: Partial<T> | Record<string, any>;
+  where: Partial<T>;
   limit?: number;
 }
 
