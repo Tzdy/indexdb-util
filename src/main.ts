@@ -13,7 +13,7 @@ const util = new IndexDBUtil({
 util.connect().then(async (db) => {
   const list = await util.manager.find(A, {
     where: {
-      a: 1,
+      a: "s",
     },
   });
 });

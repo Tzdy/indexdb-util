@@ -93,8 +93,168 @@ export function PrimaryGeneratedColumn() {
   };
 }
 
+const symbol = Symbol();
+
+interface CompareItem {
+  symbol: Symbol;
+  value: any;
+  equal: boolean;
+  more: boolean;
+  less: boolean;
+}
+
+function generateIDBRange(item: CompareItem | CompareItem[] | null) {
+  if (!item) {
+    return null;
+  }
+  if (item instanceof Array) {
+    if (item[0] && item[0].symbol === symbol) {
+      const idbRange = IDBKeyRange.bound(
+        item[0].value,
+        item[1].value,
+        !item[0].equal,
+        !item[1].equal
+      );
+      return idbRange;
+    }
+  } else {
+    if (item.symbol === symbol) {
+      if (item.more) {
+        return IDBKeyRange.upperBound(item.value, !item.equal);
+      } else if (item.less) {
+        return IDBKeyRange.lowerBound(item.value, !item.equal);
+      }
+    }
+  }
+  return null;
+}
+
+function isCompareItem(item: any): item is CompareItem {
+  if (item.symbol === symbol) {
+    return true;
+  } else {
+    return false;
+  }
+}
+
+type allowWhereType =
+  | CompareItem
+  | CompareItem[]
+  | string
+  | boolean
+  | number
+  | Date;
+function compareWith(where: Record<string, allowWhereType>, cursorObject: any) {
+  return Object.keys(where).every((key) => {
+    const val = where[key];
+    const cursorVal = cursorObject[key];
+    if (val instanceof Array) {
+      // between
+      if (val.every((item) => isCompareItem(item))) {
+        const left = val[0];
+        const right = val[1];
+        // x >= left && x <= right
+        if (left.equal && right.equal) {
+          if (cursorVal >= left.value && cursorVal <= right.value) {
+            return true;
+          }
+        } else if (left.equal) {
+          if (cursorVal >= left.value && cursorVal < right.value) {
+            return true;
+          }
+        } else if (right.equal) {
+          if (cursorVal > left.value && cursorVal <= right.value) {
+            return true;
+          }
+        } else {
+          if (cursorVal > left.value && cursorVal < right.value) {
+            return true;
+          }
+        }
+        return false;
+      }
+    } else if (isCompareItem(val)) {
+      if (val.more && val.equal) {
+        if (cursorVal >= val.value) {
+          return true;
+        }
+      } else if (val.less && val.equal) {
+        if (cursorVal <= val.value) {
+          return true;
+        }
+      } else if (val.more) {
+        if (cursorVal > val.value) {
+          return true;
+        }
+      } else if (val.less) {
+        if (cursorVal < val.value) {
+          return true;
+        }
+      } else if (val.equal) {
+        if (cursorVal === val.value) {
+          return true;
+        }
+      }
+      return false;
+    } else {
+    }
+  });
+}
+
+export function LessThen(val: any) {
+  if (val && val.symbol === symbol) {
+    val.less = true;
+    return val;
+  }
+  return {
+    symbol,
+    value: !!val,
+    equal: false,
+    more: false,
+    less: true,
+  };
+}
+
+export function Equal(val: any) {
+  return {
+    symbol,
+    value: val,
+    equal: true,
+    more: false,
+    less: false,
+  };
+}
+
+export function MoreThen(val: any) {
+  if (val && val.symbol === symbol) {
+    val.more = true;
+    return val;
+  }
+  return {
+    symbol,
+    value: !!val,
+    equal: false,
+    more: true,
+    less: false,
+  };
+}
+
+export function Between(
+  left: any,
+  right: any,
+  leftOpen: boolean,
+  rightOpen: boolean
+) {
+  return [
+    { symbol, value: left, more: true, less: false, equal: !leftOpen },
+    { symbol, value: right, more: false, less: true, equal: !rightOpen },
+  ];
+}
+
 interface ManagerOptions<T> {
-  where: Partial<T>;
+  // 类型推断
+  where?: { [K in keyof T]: T[K] | CompareItem | CompareItem[] };
+  index?: string;
   limit?: number;
 }
 
@@ -151,77 +311,176 @@ export class IndexDBUtil {
       ...options,
     };
 
-    function findByPrimaryKey(
-      objectStore: IDBObjectStore,
-      where: Record<string, any>,
-      primaryKey: string
+    // 取一个命中的索引
+    function filterIndex(
+      keys: string[],
+      indexList: Index[],
+      unique: boolean = false
     ) {
-      const keys = Object.keys(where);
-      return new Promise<any>((resolve, reject) => {
-        // 如果where中包含主键
-        if (keys.includes(primaryKey)) {
-          const request = objectStore.get(where[primaryKey]);
-          request.addEventListener("success", () => {
-            resolve(request.result);
-          });
-          request.addEventListener("error", (err) => {
-            reject(err);
-          });
-          return;
-        } else {
-          resolve(null);
+      for (let index of indexList) {
+        if (unique) {
+          if (!index.unique) {
+            continue;
+          }
         }
-      });
+        if (index.keyPath instanceof Array) {
+          if (index.keyPath.every((k) => keys.includes(k))) {
+            return index;
+          }
+        } else {
+          if (keys.includes(index.keyPath)) {
+            return index;
+          }
+        }
+      }
     }
 
-    function findByUniqueIndex(
+    function findByPrimaryKey(
       objectStore: IDBObjectStore,
-      where: Record<string, any>
+      primaryKey: string,
+      options?: ManagerOptions<Record<string, any>>
     ) {
-      return new Promise<any>((resolve, reject) => {
-        const keys = Object.keys(where);
-        const uniqueIndex = keys.find((key) => objectStore.index(key).unique);
-        // 如果有唯一索引
-        if (uniqueIndex) {
-          const request = objectStore
-            .index(uniqueIndex)
-            .get(where[uniqueIndex]);
-          request.addEventListener("success", () => {
-            resolve(request.result);
-          });
-          request.addEventListener("error", (err) => {
-            reject(err);
-          });
-        } else {
-          resolve(null);
+      let keys: string[] | null = null;
+      if (options && options.where) {
+        keys = Object.keys(options.where);
+        if (keys.length === 0) {
+          return Promise.resolve(null);
         }
+      } else {
+        return Promise.resolve(null);
+      }
+      return new Promise<any>((resolve, reject) => {
+        let request: IDBRequest | null = null;
+        // 如果where中包含主键
+        if (options && options.where && keys && keys.includes(primaryKey)) {
+          const key = generateIDBRange(options.where[primaryKey]);
+
+          if (!key) {
+            request = objectStore.get(options.where[primaryKey]);
+          } else {
+            request = objectStore.getAll(key);
+          }
+        } else {
+          return resolve(null);
+        }
+        request.addEventListener("success", () => {
+          resolve(request && request.result);
+        });
+        request.addEventListener("error", (err) => {
+          reject(err);
+        });
       });
     }
 
     function findByIndex(
       objectStore: IDBObjectStore,
-      where: Record<string, any>
+      config: EntityConfig,
+      options?: ManagerOptions<Record<string, any>>,
+      unique?: boolean
     ) {
+      let keys: string[] | null = null;
       return new Promise<any>((resolve, reject) => {
-        const keys = Object.keys(where);
-        const index = keys.find((key) => objectStore.index(key));
-        // 如果有索引
-        if (index) {
-          const request = objectStore.index(index).getAll(where[index]);
-          request.addEventListener("success", () => {
-            resolve(request.result);
-          });
-          request.addEventListener("error", (err) => {
-            reject(err);
-          });
+        if (options && options.where) {
+          keys = Object.keys(options.where);
+          if (keys.length === 0) {
+            return resolve(null);
+          }
         } else {
-          resolve(null);
+          return resolve(null);
         }
+        const index = filterIndex(keys, config.indexList, !!unique);
+        let request: IDBRequest | null = null;
+        if (index) {
+          // 联合唯一索引
+          if (index.keyPath instanceof Array) {
+            const queryList = index.keyPath.map((k) => {
+              // 是确切值不是范围值
+              if (
+                options &&
+                options.where &&
+                options.where[k] &&
+                options.where[k].symbol !== symbol
+              ) {
+                return options.where[k];
+              }
+            });
+            // 在没有IDBKeyRange的情况下，并且keyPath数组中所有项都命中才能触发联合索引
+            if (queryList.every((val) => val)) {
+              request = objectStore.index(index.name).getAll(queryList);
+            }
+          } else {
+            // 单唯一索引
+            const queryVal = options.where[index.keyPath];
+            if (queryVal && queryVal.symbol !== symbol) {
+              request = objectStore.index(index.name).getAll(queryVal);
+            } else if (queryVal && queryVal.symbol === symbol) {
+              request = objectStore
+                .index(index.name)
+                .getAll(generateIDBRange(queryVal));
+            }
+          }
+        } else {
+          return resolve(null);
+        }
+        if (!request) {
+          return resolve(null);
+        }
+        request.addEventListener("success", () => {
+          resolve(request && request.result);
+        });
+        request.addEventListener("error", (err) => {
+          reject(err);
+        });
+      });
+    }
+
+    function findByUniqueIndex(
+      objectStore: IDBObjectStore,
+      config: EntityConfig,
+      options?: ManagerOptions<Record<string, any>>
+    ) {
+      return findByIndex(objectStore, config, options, true);
+    }
+
+    function findByNotIndex(
+      objectStore: IDBObjectStore,
+      config: EntityConfig,
+      options?: ManagerOptions<Record<string, any>>,
+      single?: boolean
+    ) {
+      return new Promise((resolve, reject) => {
+        const request = objectStore.openCursor();
+        const keys: string[] | null = options?.where
+          ? Object.keys(options.where)
+          : null;
+        request.addEventListener("success", () => {
+          const cursor = request.result;
+          if (cursor) {
+            if (keys) {
+              if (
+                keys.every(
+                  (key) =>
+                    options?.where && options.where[key] === cursor.value[key]
+                )
+              ) {
+                if (single) {
+                  return resolve(cursor.value);
+                } else {
+                  resolve(cursor.value);
+                }
+              }
+            }
+            cursor.continue();
+          }
+        });
+        request.addEventListener("error", (err) => {
+          reject(err);
+        });
       });
     }
 
     this.manager = {
-      findOne: (Entity: any, options = { where: {} }) => {
+      findOne: (Entity: any, options) => {
         const config = init(Entity);
         return new Promise(async (resolve, reject) => {
           const objectStore = this.db
@@ -229,29 +488,25 @@ export class IndexDBUtil {
             .objectStore(config.objectStoreName);
           const primaryIndexData = await findByPrimaryKey(
             objectStore,
-            options.where,
-            config.primary.keyPath
+            config.primary.keyPath,
+            options
           );
-          const keys = Object.keys(options.where);
           if (primaryIndexData) {
-            return resolve(primaryIndexData);
+            return resolve(primaryIndexData[0]);
           }
 
           const uniqueIndexData = await findByUniqueIndex(
             objectStore,
-            options.where
+            config,
+            options
           );
           if (uniqueIndexData) {
-            return resolve(uniqueIndexData);
+            return resolve(uniqueIndexData[0]);
           }
 
-          const indexDataList = await findByIndex(objectStore, options.where);
-          if (indexDataList) {
-            return resolve(
-              indexDataList.find((i: any) => {
-                return keys.every((k) => options.where[k] === i[k]);
-              })
-            );
+          const indexData = await findByIndex(objectStore, config, options);
+          if (indexData) {
+            return resolve(indexData[0]);
           }
 
           // 没有索引
