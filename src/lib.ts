@@ -253,7 +253,7 @@ export function Between(
 
 interface ManagerOptions<T> {
   // 类型推断
-  where?: { [K in keyof T]: T[K] | CompareItem | CompareItem[] };
+  where?: { [K in keyof T]?: T[K] | CompareItem | CompareItem[] };
   index?: string;
   limit?: number;
 }
@@ -447,30 +447,35 @@ export class IndexDBUtil {
       config: EntityConfig,
       options?: ManagerOptions<Record<string, any>>,
       single?: boolean
-    ) {
+    ): any {
       return new Promise((resolve, reject) => {
         const request = objectStore.openCursor();
         const keys: string[] | null = options?.where
           ? Object.keys(options.where)
           : null;
+        const result: any = []; // single=false时用来保存多条结果
         request.addEventListener("success", () => {
           const cursor = request.result;
           if (cursor) {
             if (keys) {
+              // where中的每一项都满足
               if (
                 keys.every(
                   (key) =>
                     options?.where && options.where[key] === cursor.value[key]
                 )
               ) {
+                // 如果只需要查询一条，就可以返回
                 if (single) {
                   return resolve(cursor.value);
                 } else {
-                  resolve(cursor.value);
+                  result.push(cursor.value);
                 }
               }
             }
             cursor.continue();
+          } else {
+            resolve(result);
           }
         });
         request.addEventListener("error", (err) => {
@@ -483,48 +488,46 @@ export class IndexDBUtil {
       findOne: (Entity: any, options) => {
         const config = init(Entity);
         return new Promise(async (resolve, reject) => {
-          const objectStore = this.db
-            .transaction(config.objectStoreName, "readonly")
-            .objectStore(config.objectStoreName);
-          const primaryIndexData = await findByPrimaryKey(
-            objectStore,
-            config.primary.keyPath,
-            options
-          );
-          if (primaryIndexData) {
-            return resolve(primaryIndexData[0]);
-          }
-
-          const uniqueIndexData = await findByUniqueIndex(
-            objectStore,
-            config,
-            options
-          );
-          if (uniqueIndexData) {
-            return resolve(uniqueIndexData[0]);
-          }
-
-          const indexData = await findByIndex(objectStore, config, options);
-          if (indexData) {
-            return resolve(indexData[0]);
-          }
-
-          // 没有索引
-          const request = objectStore.openCursor();
-          request.addEventListener("success", () => {
-            const cursor = request.result;
-            if (cursor) {
-              if (
-                keys.every((key) => options.where[key] === cursor.value[key])
-              ) {
-                return resolve(cursor.value);
-              }
-              cursor.continue();
+          try {
+            const objectStore = this.db
+              .transaction(config.objectStoreName, "readonly")
+              .objectStore(config.objectStoreName);
+            const primaryIndexData = await findByPrimaryKey(
+              objectStore,
+              config.primary.keyPath,
+              options
+            );
+            if (primaryIndexData) {
+              return resolve(primaryIndexData[0]);
             }
-          });
-          request.addEventListener("error", (err) => {
+
+            const uniqueIndexData = await findByUniqueIndex(
+              objectStore,
+              config,
+              options
+            );
+            if (uniqueIndexData) {
+              return resolve(uniqueIndexData[0]);
+            }
+
+            const indexData = await findByIndex(objectStore, config, options);
+            if (indexData) {
+              return resolve(indexData[0]);
+            }
+
+            // 没有索引
+            const data = await findByNotIndex(
+              objectStore,
+              config,
+              options,
+              true
+            );
+            if (data) {
+              return resolve(data);
+            }
+          } catch (err) {
             reject(err);
-          });
+          }
         });
       },
 
@@ -542,104 +545,107 @@ export class IndexDBUtil {
         });
       },
 
-      find: (Entity, options = { where: {} }) => {
+      find: (Entity, options) => {
+        const config = init(Entity);
         return new Promise(async (resolve, reject) => {
-          const config = init(Entity);
-          const objectStore = this.db
-            .transaction(config.objectStoreName, "readonly")
-            .objectStore(config.objectStoreName);
-          const keys = Object.keys(options.where);
-          const indexDataList = await findByIndex(objectStore, options.where);
-          if (indexDataList) {
-            return resolve(
-              indexDataList.find((i: any) => {
-                return keys.every((k) => options.where[k] === i[k]);
-              })
+          try {
+            const objectStore = this.db
+              .transaction(config.objectStoreName, "readonly")
+              .objectStore(config.objectStoreName);
+            const primaryIndexData = await findByPrimaryKey(
+              objectStore,
+              config.primary.keyPath,
+              options
             );
-          }
-
-          // 没有索引
-          const request = objectStore.openCursor();
-          const list: InstanceType<AbstractClass>[] = [];
-          request.addEventListener("success", () => {
-            const cursor = request.result;
-            if (cursor) {
-              if (
-                keys.every((key) => options.where[key] === cursor.value[key])
-              ) {
-                list.push(cursor.value);
-              }
-              cursor.continue();
-            } else {
-              resolve(list);
+            if (primaryIndexData) {
+              return resolve(primaryIndexData);
             }
-          });
-          request.addEventListener("error", (err) => {
-            reject(err);
-          });
-        });
-      },
 
-      updateOne: (Entity, value) => {
-        return new Promise((resolve, reject) => {
-          const config = init(Entity);
-          const request = this.db
-            .transaction(config.objectStoreName, "readwrite")
-            .objectStore(config.objectStoreName)
-            .put(value);
-          request.addEventListener("success", () => {
-            resolve(request.result);
-          });
-          request.addEventListener("error", (err) => reject(err));
-        });
-      },
+            const uniqueIndexData = await findByUniqueIndex(
+              objectStore,
+              config,
+              options
+            );
+            if (uniqueIndexData) {
+              return resolve(uniqueIndexData);
+            }
 
-      deleteOne: (Entity, options = { where: {} }) => {
-        return new Promise(async (resolve, reject) => {
-          const config = init(Entity);
-          const objectStore = this.db
-            .transaction(config.objectStoreName, "readwrite")
-            .objectStore(config.objectStoreName);
+            const indexData = await findByIndex(objectStore, config, options);
+            if (indexData) {
+              return resolve(indexData);
+            }
 
-          const keys = Object.keys(options.where);
-          const indexDataList = await findByIndex(objectStore, options.where);
-          if (indexDataList) {
-            const data = indexDataList.find((i: any) => {
-              return keys.every((k) => options.where[k] === i[k]);
-            });
+            // 没有索引
+            const data = await findByNotIndex(objectStore, config, options);
             if (data) {
-              objectStore
-                .delete(data[config.primary.keyPath])
-                .addEventListener("success", () => {
-                  resolve(data);
-                });
-              return;
+              return resolve(data);
             }
-          }
-
-          // 没有索引
-          const request = objectStore.openCursor();
-          request.addEventListener("success", () => {
-            const cursor = request.result;
-            if (cursor) {
-              if (
-                keys.every((key) => options.where[key] === cursor.value[key])
-              ) {
-                objectStore
-                  .delete(cursor.value[config.primary.keyPath])
-                  .addEventListener("success", () => {
-                    resolve(cursor.value);
-                  });
-                return;
-              }
-              cursor.continue();
-            }
-          });
-          request.addEventListener("error", (err) => {
+          } catch (err) {
             reject(err);
-          });
+          }
         });
       },
+
+      // updateOne: (Entity, value) => {
+      //   return new Promise((resolve, reject) => {
+      //     const config = init(Entity);
+      //     const request = this.db
+      //       .transaction(config.objectStoreName, "readwrite")
+      //       .objectStore(config.objectStoreName)
+      //       .put(value);
+      //     request.addEventListener("success", () => {
+      //       resolve(request.result);
+      //     });
+      //     request.addEventListener("error", (err) => reject(err));
+      //   });
+      // },
+
+      // deleteOne: (Entity, options = { where: {} }) => {
+      //   return new Promise(async (resolve, reject) => {
+      //     const config = init(Entity);
+      //     const objectStore = this.db
+      //       .transaction(config.objectStoreName, "readwrite")
+      //       .objectStore(config.objectStoreName);
+
+      //     const keys = Object.keys(options.where);
+      //     const indexDataList = await findByIndex(objectStore, options.where);
+      //     if (indexDataList) {
+      //       const data = indexDataList.find((i: any) => {
+      //         return keys.every((k) => options.where[k] === i[k]);
+      //       });
+      //       if (data) {
+      //         objectStore
+      //           .delete(data[config.primary.keyPath])
+      //           .addEventListener("success", () => {
+      //             resolve(data);
+      //           });
+      //         return;
+      //       }
+      //     }
+
+      //     // 没有索引
+      //     const request = objectStore.openCursor();
+      //     request.addEventListener("success", () => {
+      //       const cursor = request.result;
+      //       if (cursor) {
+      //         if (
+      //           keys.every((key) => options.where[key] === cursor.value[key])
+      //         ) {
+      //           objectStore
+      //             .delete(cursor.value[config.primary.keyPath])
+      //             .addEventListener("success", () => {
+      //               resolve(cursor.value);
+      //             });
+      //           return;
+      //         }
+      //         cursor.continue();
+      //       }
+      //     });
+      //     request.addEventListener("error", (err) => {
+      //       reject(err);
+      //     });
+      //   });
+      // },
     };
   }
 

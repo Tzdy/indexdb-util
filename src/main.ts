@@ -1,7 +1,16 @@
-import { IndexDBUtil } from "@/lib";
+import { Column, Entity, IndexDBUtil, PrimaryGeneratedColumn } from "@/lib";
 
+@Entity('a')
 class A {
-  a: number;
+  @PrimaryGeneratedColumn()
+  id: number;
+
+  @Column()
+  name: string;
+
+  @Column()
+  student_number: number
+
 }
 
 const util = new IndexDBUtil({

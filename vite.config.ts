@@ -1,3 +1,4 @@
+/// <reference types="vitest" />
 import { fileURLToPath } from "url";
 import { defineConfig } from "vite";
 
@@ -13,5 +14,8 @@ export default defineConfig({
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),
     },
+  },
+  test: {
+    include: ["test/*.test.ts"],
   },
 });
