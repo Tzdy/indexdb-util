@@ -197,6 +197,8 @@ function compareWith(where: Record<string, allowWhereType>, cursorObject: any) {
       }
       return false;
     } else {
+      // 非比较值
+      return val === cursorVal;
     }
   });
 }
@@ -208,7 +210,7 @@ export function LessThen(val: any) {
   }
   return {
     symbol,
-    value: !!val,
+    value: val,
     equal: false,
     more: false,
     less: true,
@@ -232,7 +234,7 @@ export function MoreThen(val: any) {
   }
   return {
     symbol,
-    value: !!val,
+    value: val,
     equal: false,
     more: true,
     less: false,
@@ -457,25 +459,26 @@ export class IndexDBUtil {
         request.addEventListener("success", () => {
           const cursor = request.result;
           if (cursor) {
-            if (keys) {
-              // where中的每一项都满足
-              if (
-                keys.every(
-                  (key) =>
-                    options?.where && options.where[key] === cursor.value[key]
-                )
-              ) {
-                // 如果只需要查询一条，就可以返回
-                if (single) {
-                  return resolve(cursor.value);
-                } else {
-                  result.push(cursor.value);
-                }
+            // 存在options && options.where时
+            if (options?.where && keys) {
+              // where不满足就直接下一个cursor
+              if (!compareWith(options.where, cursor.value)) {
+                return cursor.continue();
               }
+            }
+            // 如果只需要查询一条，就可以返回
+            if (single) {
+              return resolve(cursor.value);
+            } else {
+              result.push(cursor.value);
             }
             cursor.continue();
           } else {
-            resolve(result);
+            if (single) {
+              resolve(null);
+            } else {
+              resolve(result);
+            }
           }
         });
         request.addEventListener("error", (err) => {
@@ -514,7 +517,6 @@ export class IndexDBUtil {
             if (indexData) {
               return resolve(indexData[0]);
             }
-
             // 没有索引
             const data = await findByNotIndex(
               objectStore,
@@ -522,9 +524,7 @@ export class IndexDBUtil {
               options,
               true
             );
-            if (data) {
-              return resolve(data);
-            }
+            return resolve(data);
           } catch (err) {
             reject(err);
           }
@@ -577,9 +577,7 @@ export class IndexDBUtil {
 
             // 没有索引
             const data = await findByNotIndex(objectStore, config, options);
-            if (data) {
-              return resolve(data);
-            }
+            return resolve(data);
           } catch (err) {
             reject(err);
           }
