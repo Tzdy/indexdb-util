@@ -181,4 +181,64 @@ describe("not has index", async () => {
       )
     );
   });
+
+  it("update one query", async () => {
+    const { id, ...item } = studentList[10];
+    await indexdbUtil.manager.updateOne(Student, studentList[10], {
+      where: studentList[5],
+    });
+    const res = await indexdbUtil.manager.findOne(Student, {
+      where: {
+        id: studentList[5].id,
+      },
+    });
+    expect(res).toEqual({
+      id: studentList[5].id,
+      ...item,
+    });
+  });
+
+  it("update one query2", async () => {
+    await indexdbUtil.manager.updateOne(
+      Student,
+      { age: 10000 },
+      {
+        where: {
+          id: 50,
+        },
+      }
+    );
+    const result = await indexdbUtil.manager.findOne(Student, {
+      where: {
+        id: 50,
+      },
+    });
+    const { age, ...item } = studentList[50];
+    expect(result).toEqual({
+      age: 10000,
+      ...item,
+    });
+  });
+
+  it("update one compare", async () => {
+    await indexdbUtil.manager.updateOne(
+      Student,
+      { age: 10000 },
+      {
+        where: {
+          id: MoreThen(50),
+        },
+      }
+    );
+    const result = await indexdbUtil.manager.findOne(Student, {
+      where: {
+        id: 51,
+      },
+    });
+    const { age, ...item } = studentList[51];
+    expect(result).toEqual({
+      age: 10000,
+      ...item,
+    });
+  });
 });

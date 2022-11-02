@@ -120,9 +120,9 @@ function generateIDBRange(item: CompareItem | CompareItem[] | null) {
   } else {
     if (item.symbol === symbol) {
       if (item.more) {
-        return IDBKeyRange.upperBound(item.value, !item.equal);
-      } else if (item.less) {
         return IDBKeyRange.lowerBound(item.value, !item.equal);
+      } else if (item.less) {
+        return IDBKeyRange.upperBound(item.value, !item.equal);
       }
     }
   }
@@ -277,7 +277,8 @@ interface Manager {
   ): Promise<IDBValidKey>;
   updateOne<T extends AbstractClass>(
     Entity: T,
-    value: Partial<InstanceType<T>>
+    value: Partial<InstanceType<T>>,
+    options?: ManagerOptions<InstanceType<T>>
   ): Promise<any>;
   deleteOne<T extends AbstractClass>(
     Entity: T,
@@ -346,32 +347,22 @@ export class IndexDBUtil {
       if (options && options.where) {
         keys = Object.keys(options.where);
         if (keys.length === 0) {
-          return Promise.resolve(null);
+          return null;
         }
       } else {
-        return Promise.resolve(null);
+        return null;
       }
-      return new Promise<any>((resolve, reject) => {
-        let request: IDBRequest | null = null;
-        // 如果where中包含主键
-        if (options && options.where && keys && keys.includes(primaryKey)) {
-          const key = generateIDBRange(options.where[primaryKey]);
-
-          if (!key) {
-            request = objectStore.get(options.where[primaryKey]);
-          } else {
-            request = objectStore.getAll(key);
-          }
+      // 如果where中包含主键
+      if (options && options.where && keys && keys.includes(primaryKey)) {
+        const key = generateIDBRange(options.where[primaryKey]);
+        if (!key) {
+          return objectStore.openCursor(options.where[primaryKey]);
         } else {
-          return resolve(null);
+          return objectStore.openCursor(key);
         }
-        request.addEventListener("success", () => {
-          resolve(request && request.result);
-        });
-        request.addEventListener("error", (err) => {
-          reject(err);
-        });
-      });
+      } else {
+        return null;
+      }
     }
 
     function findByIndex(
@@ -381,59 +372,46 @@ export class IndexDBUtil {
       unique?: boolean
     ) {
       let keys: string[] | null = null;
-      return new Promise<any>((resolve, reject) => {
-        if (options && options.where) {
-          keys = Object.keys(options.where);
-          if (keys.length === 0) {
-            return resolve(null);
+      if (options && options.where) {
+        keys = Object.keys(options.where);
+        if (keys.length === 0) {
+          return null;
+        }
+      } else {
+        return null;
+      }
+      const index = filterIndex(keys, config.indexList, !!unique);
+      if (index) {
+        // 联合唯一索引
+        if (index.keyPath instanceof Array) {
+          const queryList = index.keyPath.map((k) => {
+            // 是确切值不是范围值
+            if (
+              options &&
+              options.where &&
+              options.where[k] &&
+              options.where[k].symbol !== symbol
+            ) {
+              return options.where[k];
+            }
+          });
+          // 在没有IDBKeyRange的情况下，并且keyPath数组中所有项都命中才能触发联合索引
+          if (queryList.every((val) => val)) {
+            return objectStore.index(index.name).openCursor(queryList);
           }
         } else {
-          return resolve(null);
-        }
-        const index = filterIndex(keys, config.indexList, !!unique);
-        let request: IDBRequest | null = null;
-        if (index) {
-          // 联合唯一索引
-          if (index.keyPath instanceof Array) {
-            const queryList = index.keyPath.map((k) => {
-              // 是确切值不是范围值
-              if (
-                options &&
-                options.where &&
-                options.where[k] &&
-                options.where[k].symbol !== symbol
-              ) {
-                return options.where[k];
-              }
-            });
-            // 在没有IDBKeyRange的情况下，并且keyPath数组中所有项都命中才能触发联合索引
-            if (queryList.every((val) => val)) {
-              request = objectStore.index(index.name).getAll(queryList);
-            }
-          } else {
-            // 单唯一索引
-            const queryVal = options.where[index.keyPath];
-            if (queryVal && queryVal.symbol !== symbol) {
-              request = objectStore.index(index.name).getAll(queryVal);
-            } else if (queryVal && queryVal.symbol === symbol) {
-              request = objectStore
-                .index(index.name)
-                .getAll(generateIDBRange(queryVal));
-            }
+          // 单唯一索引
+          const queryVal = options.where[index.keyPath];
+          if (queryVal && queryVal.symbol !== symbol) {
+            return objectStore.index(index.name).openCursor(queryVal);
+          } else if (queryVal && queryVal.symbol === symbol) {
+            return objectStore
+              .index(index.name)
+              .openCursor(generateIDBRange(queryVal));
           }
-        } else {
-          return resolve(null);
         }
-        if (!request) {
-          return resolve(null);
-        }
-        request.addEventListener("success", () => {
-          resolve(request && request.result);
-        });
-        request.addEventListener("error", (err) => {
-          reject(err);
-        });
-      });
+      }
+      return null;
     }
 
     function findByUniqueIndex(
@@ -444,14 +422,50 @@ export class IndexDBUtil {
       return findByIndex(objectStore, config, options, true);
     }
 
-    function findByNotIndex(
-      objectStore: IDBObjectStore,
+    function requestComplete(
+      request: IDBRequest | IDBRequest[],
+      resolve: (val: any) => void
+    ) {
+      if (request instanceof Array) {
+        const array: any[] = [];
+        let sit = 0;
+        request.forEach((req, index) => {
+          req.addEventListener("success", () => {
+            array[index] = req.result;
+            sit++;
+            if (sit === request.length) {
+              resolve(array);
+            }
+          });
+          req.addEventListener("error", () => {
+            array[index] = req.error;
+            sit++;
+            if (sit === request.length) {
+              resolve(array);
+            }
+          });
+        });
+      } else {
+        request.addEventListener("success", () => {
+          resolve(request.result);
+        });
+        request.addEventListener("error", () => {
+          resolve(request.error);
+        });
+      }
+    }
+
+    function traverse(
       config: EntityConfig,
+      objectStore: IDBObjectStore,
+      indexRequest: IDBRequest<IDBCursorWithValue> | null,
+      operate: "find" | "delete" | "update",
+      value?: any,
       options?: ManagerOptions<Record<string, any>>,
       single?: boolean
     ): any {
       return new Promise((resolve, reject) => {
-        const request = objectStore.openCursor();
+        const request = indexRequest || objectStore.openCursor();
         const keys: string[] | null = options?.where
           ? Object.keys(options.where)
           : null;
@@ -467,17 +481,49 @@ export class IndexDBUtil {
               }
             }
             // 如果只需要查询一条，就可以返回
-            if (single) {
-              return resolve(cursor.value);
-            } else {
-              result.push(cursor.value);
+            if (operate === "find") {
+              if (single) {
+                return resolve(cursor.value);
+              } else {
+                result.push(cursor.value);
+              }
+            } else if (operate === "delete") {
+              if (single) {
+                requestComplete(cursor.delete(), resolve);
+                return;
+              } else {
+                result.push(cursor.delete());
+              }
+            } else if (operate === "update") {
+              if (single) {
+                const proxy = new Proxy(value, {
+                  ownKeys(target) {
+                    return Object.keys(target).filter(
+                      (i) => i !== config.primary.keyPath
+                    );
+                  },
+                });
+                const val = Object.assign(cursor.value, proxy);
+                requestComplete(cursor.update(val), resolve);
+                return;
+              } else {
+                result.push(cursor.update(value));
+              }
             }
             cursor.continue();
           } else {
-            if (single) {
-              resolve(null);
-            } else {
-              resolve(result);
+            if (operate === "find") {
+              if (single) {
+                resolve(null);
+              } else {
+                resolve(result);
+              }
+            } else if (operate === "delete" || operate === "update") {
+              if (single) {
+                resolve(null);
+              } else {
+                requestComplete(result, resolve);
+              }
             }
           }
         });
@@ -495,32 +541,18 @@ export class IndexDBUtil {
             const objectStore = this.db
               .transaction(config.objectStoreName, "readonly")
               .objectStore(config.objectStoreName);
-            const primaryIndexData = await findByPrimaryKey(
-              objectStore,
-              config.primary.keyPath,
-              options
-            );
-            if (primaryIndexData) {
-              return resolve(primaryIndexData[0]);
-            }
-
-            const uniqueIndexData = await findByUniqueIndex(
-              objectStore,
-              config,
-              options
-            );
-            if (uniqueIndexData) {
-              return resolve(uniqueIndexData[0]);
-            }
-
-            const indexData = await findByIndex(objectStore, config, options);
-            if (indexData) {
-              return resolve(indexData[0]);
-            }
+            let indexRequest: IDBRequest | null = null;
+            indexRequest =
+              findByPrimaryKey(objectStore, config.primary.keyPath, options) ||
+              findByUniqueIndex(objectStore, config, options) ||
+              findByIndex(objectStore, config, options);
             // 没有索引
-            const data = await findByNotIndex(
-              objectStore,
+            const data = await traverse(
               config,
+              objectStore,
+              indexRequest,
+              "find",
+              null,
               options,
               true
             );
@@ -552,31 +584,21 @@ export class IndexDBUtil {
             const objectStore = this.db
               .transaction(config.objectStoreName, "readonly")
               .objectStore(config.objectStoreName);
-            const primaryIndexData = await findByPrimaryKey(
-              objectStore,
-              config.primary.keyPath,
-              options
-            );
-            if (primaryIndexData) {
-              return resolve(primaryIndexData);
-            }
-
-            const uniqueIndexData = await findByUniqueIndex(
-              objectStore,
-              config,
-              options
-            );
-            if (uniqueIndexData) {
-              return resolve(uniqueIndexData);
-            }
-
-            const indexData = await findByIndex(objectStore, config, options);
-            if (indexData) {
-              return resolve(indexData);
-            }
+            let indexRequest: IDBRequest | null = null;
+            indexRequest =
+              findByPrimaryKey(objectStore, config.primary.keyPath, options) ||
+              findByUniqueIndex(objectStore, config, options) ||
+              findByIndex(objectStore, config, options);
 
             // 没有索引
-            const data = await findByNotIndex(objectStore, config, options);
+            const data = await traverse(
+              config,
+              objectStore,
+              indexRequest,
+              "find",
+              null,
+              options
+            );
             return resolve(data);
           } catch (err) {
             reject(err);
@@ -584,66 +606,56 @@ export class IndexDBUtil {
         });
       },
 
-      // updateOne: (Entity, value) => {
-      //   return new Promise((resolve, reject) => {
-      //     const config = init(Entity);
-      //     const request = this.db
-      //       .transaction(config.objectStoreName, "readwrite")
-      //       .objectStore(config.objectStoreName)
-      //       .put(value);
-      //     request.addEventListener("success", () => {
-      //       resolve(request.result);
-      //     });
-      //     request.addEventListener("error", (err) => reject(err));
-      //   });
-      // },
+      updateOne: (Entity, value, options) => {
+        return new Promise(async (resolve, reject) => {
+          const config = init(Entity);
+          const objectStore = this.db
+            .transaction(config.objectStoreName, "readwrite")
+            .objectStore(config.objectStoreName);
+          let indexRequest: IDBRequest | null = null;
+          indexRequest =
+            findByPrimaryKey(objectStore, config.primary.keyPath, options) ||
+            findByUniqueIndex(objectStore, config, options) ||
+            findByIndex(objectStore, config, options);
+          // 没有索引
+          const data = await traverse(
+            config,
+            objectStore,
+            indexRequest,
+            "update",
+            value,
+            options,
+            true
+          );
+          resolve(data);
+        });
+      },
 
-      // deleteOne: (Entity, options = { where: {} }) => {
-      //   return new Promise(async (resolve, reject) => {
-      //     const config = init(Entity);
-      //     const objectStore = this.db
-      //       .transaction(config.objectStoreName, "readwrite")
-      //       .objectStore(config.objectStoreName);
+      deleteOne: (Entity, options) => {
+        return new Promise(async (resolve, reject) => {
+          const config = init(Entity);
+          const objectStore = this.db
+            .transaction(config.objectStoreName, "readwrite")
+            .objectStore(config.objectStoreName);
+          let indexRequest: IDBRequest | null = null;
 
-      //     const keys = Object.keys(options.where);
-      //     const indexDataList = await findByIndex(objectStore, options.where);
-      //     if (indexDataList) {
-      //       const data = indexDataList.find((i: any) => {
-      //         return keys.every((k) => options.where[k] === i[k]);
-      //       });
-      //       if (data) {
-      //         objectStore
-      //           .delete(data[config.primary.keyPath])
-      //           .addEventListener("success", () => {
-      //             resolve(data);
-      //           });
-      //         return;
-      //       }
-      //     }
-
-      //     // 没有索引
-      //     const request = objectStore.openCursor();
-      //     request.addEventListener("success", () => {
-      //       const cursor = request.result;
-      //       if (cursor) {
-      //         if (
-      //           keys.every((key) => options.where[key] === cursor.value[key])
-      //         ) {
-      //           objectStore
-      //             .delete(cursor.value[config.primary.keyPath])
-      //             .addEventListener("success", () => {
-      //               resolve(cursor.value);
-      //             });
-      //           return;
-      //         }
-      //         cursor.continue();
-      //       }
-      //     });
-      //     request.addEventListener("error", (err) => {
-      //       reject(err);
-      //     });
-      //   });
-      // },
+          indexRequest =
+            findByPrimaryKey(objectStore, config.primary.keyPath, options) ||
+            findByUniqueIndex(objectStore, config, options) ||
+            findByIndex(objectStore, config, options);
+          // 没有索引
+          const data = await traverse(
+            config,
+            objectStore,
+            indexRequest,
+            "delete",
+            null,
+            options,
+            true
+          );
+          resolve(data);
+        });
+      },
     };
   }
 
