@@ -45,22 +45,26 @@ export class Student {
 
 const studentList: Student[] = [];
 
+function createStudent(i: number) {
+  const student1 = new Student();
+  student1.id = i;
+  student1.name = "name" + i;
+  student1.age = i;
+  student1.student_number = 2000 + i;
+  student1.hostel_number = Math.floor(i / 4);
+  student1.bed_numbr = i % 4;
+  student1.gender = i % 2;
+  student1.iq = i % 3;
+  return student1;
+}
+
 const indexdbUtil = new IndexDBUtil({
   name: "school",
   version: 1,
   entityList: [Student],
   versionChange(transaction, currentVersion, goalVersion) {
     for (let i = 0; i < 100; i++) {
-      const student1 = new Student();
-      student1.id = i;
-      student1.name = "name" + i;
-      student1.age = i;
-      student1.student_number = 2000 + i;
-      student1.hostel_number = Math.floor(i / 4);
-      student1.bed_numbr = i % 4;
-      student1.gender = i % 2;
-      student1.iq = i % 3;
-
+      const student1 = createStudent(i);
       studentList.push(student1);
       transaction.objectStore("student").add(student1);
     }
@@ -183,41 +187,45 @@ describe("not has index", async () => {
   });
 
   it("update one query", async () => {
-    const { id, ...item } = studentList[10];
     await indexdbUtil.manager.updateOne(Student, studentList[10], {
       where: studentList[5],
+    });
+    Object.keys(studentList[10]).forEach((key) => {
+      if (key !== "id") {
+        Reflect.set(studentList[5], key, Reflect.get(studentList[10], key));
+      }
     });
     const res = await indexdbUtil.manager.findOne(Student, {
       where: {
         id: studentList[5].id,
       },
     });
-    expect(res).toEqual({
-      id: studentList[5].id,
-      ...item,
-    });
+
+    expect(res).toEqual(studentList.find((i) => i.id === 5));
   });
 
   it("update one query2", async () => {
-    await indexdbUtil.manager.updateOne(
-      Student,
-      { age: 10000 },
-      {
-        where: {
-          id: 50,
-        },
-      }
-    );
+    await indexdbUtil.manager.updateOne(Student, createStudent(10000), {
+      where: {
+        id: 50,
+      },
+    });
     const result = await indexdbUtil.manager.findOne(Student, {
       where: {
         id: 50,
       },
     });
-    const { age, ...item } = studentList[50];
-    expect(result).toEqual({
-      age: 10000,
-      ...item,
+    const index = studentList.findIndex((i) => i.id === 50);
+    Object.keys(createStudent(10000)).forEach((key) => {
+      if (key !== "id") {
+        Reflect.set(
+          studentList[index],
+          key,
+          Reflect.get(createStudent(10000), key)
+        );
+      }
     });
+    expect(result).toEqual(studentList[index]);
   });
 
   it("update one compare", async () => {
@@ -235,10 +243,106 @@ describe("not has index", async () => {
         id: 51,
       },
     });
-    const { age, ...item } = studentList[51];
-    expect(result).toEqual({
-      age: 10000,
-      ...item,
+
+    const item = studentList.find((i) => i.id > 50);
+    item!.age = 10000;
+
+    expect(result).toEqual(item);
+  });
+
+  it("update query", async () => {
+    await indexdbUtil.manager.update(
+      Student,
+      { age: 10024 },
+      {
+        where: {
+          gender: 0,
+          bed_numbr: 2,
+        },
+      }
+    );
+    const deleteGoal = studentList.filter(
+      (i) => i.gender === 0 && i.bed_numbr === 2
+    );
+    deleteGoal.forEach((i) => (i.age = 10024));
+
+    const list = await indexdbUtil.manager.find(Student);
+    expect(list).toEqual(studentList);
+  });
+
+  it("delete one query", async () => {
+    await indexdbUtil.manager.deleteOne(Student, {
+      where: {
+        id: 50,
+      },
     });
+    studentList.splice(
+      studentList.findIndex((i) => i.id === 50),
+      1
+    );
+    const list = await indexdbUtil.manager.find(Student);
+    expect(list.length).toBe(99);
+    expect(list.findIndex((i) => i.id === 50)).toBe(-1);
+  });
+
+  it("delete one compare", async () => {
+    await indexdbUtil.manager.deleteOne(Student, {
+      where: {
+        id: LessThen(100),
+      },
+    });
+    studentList.splice(
+      studentList.findIndex((i) => i.id < 100),
+      1
+    );
+    const list = await indexdbUtil.manager.find(Student);
+    expect(list.length).toBe(98);
+    expect(list.findIndex((i) => i.id === 0)).toBe(-1);
+  });
+
+  it("delete query", async () => {
+    await indexdbUtil.manager.delete(Student, {
+      where: {
+        gender: 0,
+        bed_numbr: 2,
+      },
+    });
+    const deleteGoal = studentList.filter(
+      (i) => i.gender === 0 && i.bed_numbr === 2
+    );
+    deleteGoal.forEach((i) =>
+      studentList.splice(
+        studentList.findIndex((i1) => i.id === i1.id),
+        1
+      )
+    );
+
+    const list = await indexdbUtil.manager.find(Student);
+    expect(list).toEqual(studentList);
+  });
+
+  it("insert one", async () => {
+    await indexdbUtil.manager.insertOne(Student, createStudent(1000));
+    const item = await indexdbUtil.manager.findOne(Student, {
+      where: {
+        age: 1000,
+      },
+    });
+    studentList.push(createStudent(1000));
+    expect(item).toEqual(createStudent(1000));
+  });
+
+  it("insert", async () => {
+    await indexdbUtil.manager.insert(
+      Student,
+      [1001, 1002, 1003, 1004].map((i) => createStudent(i))
+    );
+    studentList.push(...[1001, 1002, 1003, 1004].map((i) => createStudent(i)));
+    const list = await indexdbUtil.manager.find(Student, {
+      where: {
+        age: MoreThen(1000),
+      },
+    });
+    expect(list).toEqual(studentList.filter((i) => i.age > 1000));
   });
 });

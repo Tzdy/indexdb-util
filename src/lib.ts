@@ -275,12 +275,25 @@ interface Manager {
     Entity: T,
     value: Partial<InstanceType<T>>
   ): Promise<IDBValidKey>;
+  insert<T extends AbstractClass>(
+    Entity: T,
+    value: Partial<InstanceType<T>>[]
+  ): Promise<IDBValidKey>;
   updateOne<T extends AbstractClass>(
     Entity: T,
     value: Partial<InstanceType<T>>,
     options?: ManagerOptions<InstanceType<T>>
   ): Promise<any>;
+  update<T extends AbstractClass>(
+    Entity: T,
+    value: Partial<InstanceType<T>>,
+    options?: ManagerOptions<InstanceType<T>>
+  ): Promise<any>;
   deleteOne<T extends AbstractClass>(
+    Entity: T,
+    options?: ManagerOptions<InstanceType<T>>
+  ): Promise<any>;
+  delete<T extends AbstractClass>(
     Entity: T,
     options?: ManagerOptions<InstanceType<T>>
   ): Promise<any>;
@@ -427,6 +440,9 @@ export class IndexDBUtil {
       resolve: (val: any) => void
     ) {
       if (request instanceof Array) {
+        if (request.length === 0) {
+          return resolve([]);
+        }
         const array: any[] = [];
         let sit = 0;
         request.forEach((req, index) => {
@@ -492,38 +508,34 @@ export class IndexDBUtil {
                 requestComplete(cursor.delete(), resolve);
                 return;
               } else {
-                result.push(cursor.delete());
+                requestComplete(cursor.delete(), (val) => {
+                  result.push(val);
+                });
               }
             } else if (operate === "update") {
+              const proxy = new Proxy(value, {
+                ownKeys(target) {
+                  return Object.keys(target).filter(
+                    (i) => i !== config.primary.keyPath
+                  );
+                },
+              });
+              const val = Object.assign(cursor.value, proxy);
               if (single) {
-                const proxy = new Proxy(value, {
-                  ownKeys(target) {
-                    return Object.keys(target).filter(
-                      (i) => i !== config.primary.keyPath
-                    );
-                  },
-                });
-                const val = Object.assign(cursor.value, proxy);
                 requestComplete(cursor.update(val), resolve);
                 return;
               } else {
-                result.push(cursor.update(value));
+                requestComplete(cursor.update(val), (val) => {
+                  result.push(val);
+                });
               }
             }
             cursor.continue();
           } else {
-            if (operate === "find") {
-              if (single) {
-                resolve(null);
-              } else {
-                resolve(result);
-              }
-            } else if (operate === "delete" || operate === "update") {
-              if (single) {
-                resolve(null);
-              } else {
-                requestComplete(result, resolve);
-              }
+            if (single) {
+              resolve(null);
+            } else {
+              resolve(result);
             }
           }
         });
@@ -574,6 +586,20 @@ export class IndexDBUtil {
             resolve(request.result);
           });
           request.addEventListener("error", (err) => reject(err));
+        });
+      },
+
+      insert: (Entity, value) => {
+        return new Promise((resolve, reject) => {
+          const config = init(Entity);
+          const transaction = this.db.transaction(
+            config.objectStoreName,
+            "readwrite"
+          );
+          const request = value.map((item) =>
+            transaction.objectStore(config.objectStoreName).add(item)
+          );
+          requestComplete(request, resolve);
         });
       },
 
@@ -631,6 +657,30 @@ export class IndexDBUtil {
         });
       },
 
+      update: (Entity, value, options) => {
+        return new Promise(async (resolve, reject) => {
+          const config = init(Entity);
+          const objectStore = this.db
+            .transaction(config.objectStoreName, "readwrite")
+            .objectStore(config.objectStoreName);
+          let indexRequest: IDBRequest | null = null;
+          indexRequest =
+            findByPrimaryKey(objectStore, config.primary.keyPath, options) ||
+            findByUniqueIndex(objectStore, config, options) ||
+            findByIndex(objectStore, config, options);
+          // 没有索引
+          const data = await traverse(
+            config,
+            objectStore,
+            indexRequest,
+            "update",
+            value,
+            options
+          );
+          resolve(data);
+        });
+      },
+
       deleteOne: (Entity, options) => {
         return new Promise(async (resolve, reject) => {
           const config = init(Entity);
@@ -652,6 +702,31 @@ export class IndexDBUtil {
             null,
             options,
             true
+          );
+          resolve(data);
+        });
+      },
+
+      delete: (Entity, options) => {
+        return new Promise(async (resolve, reject) => {
+          const config = init(Entity);
+          const objectStore = this.db
+            .transaction(config.objectStoreName, "readwrite")
+            .objectStore(config.objectStoreName);
+          let indexRequest: IDBRequest | null = null;
+
+          indexRequest =
+            findByPrimaryKey(objectStore, config.primary.keyPath, options) ||
+            findByUniqueIndex(objectStore, config, options) ||
+            findByIndex(objectStore, config, options);
+          // 没有索引
+          const data = await traverse(
+            config,
+            objectStore,
+            indexRequest,
+            "delete",
+            null,
+            options
           );
           resolve(data);
         });
