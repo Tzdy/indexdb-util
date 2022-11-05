@@ -256,8 +256,8 @@ export function Between(
 interface ManagerOptions<T> {
   // 类型推断
   where?: { [K in keyof T]?: T[K] | CompareItem | CompareItem[] };
-  index?: string;
   limit?: number;
+  skip?: number;
 }
 
 type AbstractClass = abstract new (...args: any) => any;
@@ -485,7 +485,15 @@ export class IndexDBUtil {
         const keys: string[] | null = options?.where
           ? Object.keys(options.where)
           : null;
-        const result: any = []; // single=false时用来保存多条结果
+        const limit = options?.limit;
+        // 如果limit为0，就不进行后续操作了。0没有意义
+        if (Number.isInteger(limit) && limit === 0) {
+          return single ? resolve(null) : resolve([]);
+        }
+        const skip = options?.skip;
+        let skipNum = 0;
+        const result: any[] = []; // single=false时用来保存多条结果
+
         request.addEventListener("success", () => {
           const cursor = request.result;
           if (cursor) {
@@ -496,6 +504,13 @@ export class IndexDBUtil {
                 return cursor.continue();
               }
             }
+            if (skip) {
+              if (skipNum !== skip) {
+                skipNum++;
+                return cursor.continue();
+              }
+            }
+
             // 如果只需要查询一条，就可以返回
             if (operate === "find") {
               if (single) {
@@ -528,6 +543,14 @@ export class IndexDBUtil {
                 requestComplete(cursor.update(val), (val) => {
                   result.push(val);
                 });
+              }
+            }
+            // 如果single为true，就直接跳过，后面的代码会处理single
+            // skip 跳过后，才开始记limit
+            if (limit && !single) {
+              // 如果满足了limit 就将cursor移动到一个空的位置。
+              if (limit === result.length) {
+                return cursor.continue(IDBDatabase.toString());
               }
             }
             cursor.continue();
