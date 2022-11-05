@@ -41,6 +41,9 @@ export class Student {
 
   @Column()
   iq!: number;
+
+  @Column()
+  other!: any;
 }
 
 const studentList: Student[] = [];
@@ -55,6 +58,11 @@ function createStudent(i: number) {
   student1.bed_numbr = i % 4;
   student1.gender = i % 2;
   student1.iq = i % 3;
+  if (i % 2 === 0) {
+    student1.other = Math.random() > 0.5 ? null : Math.random() * 100;
+  } else {
+    student1.other = undefined;
+  }
   return student1;
 }
 
@@ -112,5 +120,44 @@ describe("not has index", async () => {
     expect(list).toEqual(
       studentList.filter((s) => s.gender === 0).slice(5, 15)
     );
+  });
+
+  it("find order number desc", async () => {
+    const list = await indexdbUtil.manager.find(Student, {
+      order: [{ age: "DESC" }],
+    });
+    const tmp = [...studentList];
+    tmp.sort((a, b) => b.age - a.age);
+    expect(list).toEqual(tmp);
+  });
+
+  it("find order number desc has null undefined", async () => {
+    const list = await indexdbUtil.manager.find(Student, {
+      order: [{ other: "DESC" }],
+    });
+    const tmp = [...studentList];
+    tmp.sort((a, b) => {
+      if (typeof a.other === "number" && typeof b.other === "number") {
+        return b.other - a.other;
+      } else if (typeof a.other === "number" && typeof b.other !== "number") {
+        return -1;
+      } else if (typeof a.other !== "number" && typeof b.other === "number") {
+        return 1;
+      }
+      return 0;
+    });
+    expect(list).toEqual(tmp);
+  });
+
+  it("find order query number desc", async () => {
+    const list = await indexdbUtil.manager.find(Student, {
+      where: {
+        gender: 1,
+      },
+      order: [{ age: "DESC" }],
+    });
+    const tmp = [...studentList].filter((i) => i.gender === 1);
+    tmp.sort((a, b) => b.age - a.age);
+    expect(list).toEqual(tmp);
   });
 });

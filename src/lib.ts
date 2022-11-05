@@ -258,6 +258,7 @@ interface ManagerOptions<T> {
   where?: { [K in keyof T]?: T[K] | CompareItem | CompareItem[] };
   limit?: number;
   skip?: number;
+  order?: Array<{ [K in keyof T]?: "DESC" | "ASC" }>;
 }
 
 type AbstractClass = abstract new (...args: any) => any;
@@ -471,6 +472,32 @@ export class IndexDBUtil {
       }
     }
 
+    // 类似localeCompare 大于 reutrn 1 小于 return -1 等于 return 0
+    // 只在order排序时，作为比较规则。
+    function compare(a: any, b: any) {
+      // string
+      if (typeof a === "string" && typeof b === "string") {
+        return a.localeCompare(b);
+      } else if (
+        typeof a !== undefined &&
+        b !== undefined &&
+        a !== null &&
+        b !== null &&
+        typeof a === typeof b
+      ) {
+        // number, Date, boolean,
+        return a - b === 0 ? 0 : a - b > 0 ? 1 : -1;
+      } else {
+        if (typeof a !== typeof b && a) {
+          return 1;
+        } else if (typeof a !== typeof b && b) {
+          return -1;
+        } else {
+          return 0;
+        }
+      }
+    }
+
     function traverse(
       config: EntityConfig,
       objectStore: IDBObjectStore,
@@ -492,6 +519,7 @@ export class IndexDBUtil {
         }
         const skip = options?.skip;
         let skipNum = 0;
+        const order = options?.order || [];
         const result: any[] = []; // single=false时用来保存多条结果
 
         request.addEventListener("success", () => {
@@ -504,7 +532,8 @@ export class IndexDBUtil {
                 return cursor.continue();
               }
             }
-            if (skip) {
+            // 如果不排序，就可以边查边计算skip。
+            if (skip && order.length === 0) {
               if (skipNum !== skip) {
                 skipNum++;
                 return cursor.continue();
@@ -547,7 +576,8 @@ export class IndexDBUtil {
             }
             // 如果single为true，就直接跳过，后面的代码会处理single
             // skip 跳过后，才开始记limit
-            if (limit && !single) {
+            // 如果不排序，可以边查边记录limit
+            if (limit && !single && order.length === 0) {
               // 如果满足了limit 就将cursor移动到一个空的位置。
               if (limit === result.length) {
                 return cursor.continue(IDBDatabase.toString());
@@ -558,6 +588,27 @@ export class IndexDBUtil {
             if (single) {
               resolve(null);
             } else {
+              // 如果排序，需要将所有满足条件的数据查询出来，在内存中统一排序
+              // 然后处理limit和skip
+              if (order.length > 0) {
+                result.sort((a: any, b: any) => {
+                  let swap = 0;
+                  for (const item of order) {
+                    const key = Object.keys(item)[0];
+                    const left = a[key];
+                    const right = b[key];
+                    if (item[key] === "ASC") {
+                      swap = compare(left, right);
+                    } else {
+                      swap = compare(right, left);
+                    }
+                    if (swap !== 0) {
+                      break;
+                    }
+                  }
+                  return swap;
+                });
+              }
               resolve(result);
             }
           }
