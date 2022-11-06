@@ -1,7 +1,7 @@
 {
   "name": "indexdb-util",
   "version": "0.0.0-beta.1",
-  "description": "",
+  "description": "indexdb operate util toy.",
   "scripts": {
     "dev": "vite",
     "test": "vitest",
@@ -11,8 +11,12 @@
   },
   "main": "dist/indexdb-util.mjs",
   "types": "src/lib.ts",
-  "author": "",
-  "license": "ISC",
+  "author": "Tsdy",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Tzdy/indexdb-util.git"
+  },
   "dependencies": {
     "reflect-metadata": "0.1.13",
     "typescript": "4.5.4"
