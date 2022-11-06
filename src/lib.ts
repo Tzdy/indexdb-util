@@ -86,10 +86,17 @@ export function Column(options?: ColumnOptions) {
   };
 }
 
-export function PrimaryGeneratedColumn() {
+interface PrimaryGeneratedColumnOptions {
+  autoIncrement?: boolean;
+}
+
+export function PrimaryGeneratedColumn(
+  options?: PrimaryGeneratedColumnOptions
+) {
   return function (target: Object, propKey: string) {
     const config = init(target.constructor);
     config.primary.keyPath = propKey;
+    config.primary.autoIncrement = !!options?.autoIncrement;
   };
 }
 
