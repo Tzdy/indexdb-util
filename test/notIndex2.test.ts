@@ -131,6 +131,15 @@ describe("not has index", async () => {
     expect(list).toEqual(tmp);
   });
 
+  it("find order primaryKey desc", async () => {
+    const list = await indexdbUtil.manager.find(Student, {
+      order: [{ id: "DESC" }],
+    });
+    const tmp = [...studentList];
+    tmp.sort((a, b) => b.id - a.id);
+    expect(list).toEqual(tmp);
+  });
+
   it("find order number desc has null undefined", async () => {
     const list = await indexdbUtil.manager.find(Student, {
       order: [{ other: "DESC" }],
