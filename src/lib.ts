@@ -515,10 +515,20 @@ export class IndexDBUtil {
       single?: boolean
     ): any {
       return new Promise((resolve, reject) => {
-        const request = indexRequest || objectStore.openCursor();
         const keys: string[] | null = options?.where
           ? Object.keys(options.where)
           : null;
+        // 如果没有where，order中主键为DESC时，可以直接到序查询。
+        let isSinglePrimaryOrder = false;
+        let direction: IDBCursorDirection = "next";
+        if (
+          !keys &&
+          options?.order?.find((i) => i[config.primary.keyPath] === "DESC")
+        ) {
+          direction = "prev";
+          isSinglePrimaryOrder = true;
+        }
+        const request = indexRequest || objectStore.openCursor(null, direction);
         const limit = options?.limit;
         // 如果limit为0，就不进行后续操作了。0没有意义
         if (Number.isInteger(limit) && limit === 0) {
@@ -540,7 +550,7 @@ export class IndexDBUtil {
               }
             }
             // 如果不排序，就可以边查边计算skip。
-            if (skip && order.length === 0) {
+            if (skip && (order.length === 0 || isSinglePrimaryOrder)) {
               if (skipNum !== skip) {
                 skipNum++;
                 return cursor.continue();
@@ -584,7 +594,11 @@ export class IndexDBUtil {
             // 如果single为true，就直接跳过，后面的代码会处理single
             // skip 跳过后，才开始记limit
             // 如果不排序，可以边查边记录limit
-            if (limit && !single && order.length === 0) {
+            if (
+              limit &&
+              !single &&
+              (order.length === 0 || isSinglePrimaryOrder)
+            ) {
               // 如果满足了limit 就将cursor移动到一个空的位置。
               if (limit === result.length) {
                 return cursor.continue(IDBDatabase.toString());
@@ -615,6 +629,7 @@ export class IndexDBUtil {
                   }
                   return swap;
                 });
+                return resolve(result.slice(skip, limit));
               }
               resolve(result);
             }
