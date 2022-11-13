@@ -137,7 +137,7 @@ function generateIDBRange(item: CompareItem | CompareItem[] | null) {
 }
 
 function isCompareItem(item: any): item is CompareItem {
-  if (item.symbol === symbol) {
+  if (item && item.symbol === symbol) {
     return true;
   } else {
     return false;
