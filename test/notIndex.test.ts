@@ -41,6 +41,9 @@ export class Student {
 
   @Column()
   iq!: number;
+
+  @Column()
+  description?: string | null;
 }
 
 const studentList: Student[] = [];
@@ -55,6 +58,7 @@ function createStudent(i: number) {
   student1.bed_numbr = i % 4;
   student1.gender = i % 2;
   student1.iq = i % 3;
+  student1.description = i % 2 === 0 ? undefined : null;
   return student1;
 }
 
@@ -74,6 +78,40 @@ const indexdbUtil = new IndexDBUtil({
 // The two tests marked with concurrent will be run in parallel
 describe("not has index", async () => {
   await indexdbUtil.connect();
+
+  it("#3", async () => {
+    const student = await indexdbUtil.manager.findOne(Student, {
+      where: {
+        description: undefined,
+      },
+    });
+    expect(student).toEqual(
+      studentList.find((i) => i.description === undefined)
+    );
+
+    const student1 = await indexdbUtil.manager.findOne(Student, {
+      where: {
+        description: null,
+      },
+    });
+    expect(student1).toEqual(studentList.find((i) => i.description === null));
+
+    const list = await indexdbUtil.manager.find(Student, {
+      where: {
+        description: undefined,
+      },
+    });
+    expect(list).toEqual(
+      studentList.filter((i) => i.description === undefined)
+    );
+
+    const list2 = await indexdbUtil.manager.find(Student, {
+      where: {
+        id: undefined,
+      },
+    });
+    expect(list2).toEqual([]);
+  });
 
   it("findOne", async () => {
     const student = await indexdbUtil.manager.findOne(Student, {
